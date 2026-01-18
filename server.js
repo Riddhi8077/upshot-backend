@@ -5,6 +5,12 @@ import OpenAI from "openai";
 import Razorpay from "razorpay";
 import crypto from "crypto";
 
+const PLAN_CREDITS = {
+  trial: 1,   // ₹9
+  basic: 10,  // ₹99
+  pro: 50     // ₹349
+};
+
 /* ------------------ ENV ------------------ */
 dotenv.config();
 
@@ -30,8 +36,8 @@ app.use(express.json());
 
 /* ------------------ SERVICES ------------------ */
 const razorpay = new Razorpay({
-  key_id: process.env.RAZORPAY_KEY_ID.trim(),
-  key_secret: process.env.RAZORPAY_KEY_SECRET.trim(),
+  key_id: process.env.RAZORPAY_KEY_ID,
+  key_secret: process.env.RAZORPAY_KEY_SECRET,
 });
 
 const openai = new OpenAI({
@@ -67,10 +73,17 @@ app.post("/api/generate", async (req, res) => {
 
 app.post("/api/create-order", async (req, res) => {
   try {
-    const { amount } = req.body;
+    const { plan } = req.body;
 
+    const PLAN_AMOUNT = {
+      trial: 9,
+      basic: 99,
+      pro: 349,
+    };
+
+    const amount = PLAN_AMOUNT[plan];
     if (!amount) {
-      return res.status(400).json({ error: "Amount is required" });
+      return res.status(400).json({ error: "Invalid plan" });
     }
 
     const order = await razorpay.orders.create({
@@ -79,36 +92,48 @@ app.post("/api/create-order", async (req, res) => {
       receipt: `receipt_${Date.now()}`,
     });
 
-    res.json({ success: true, order });
-  } catch (err) {
-    console.error("Razorpay order error:", err);
-    res.status(500).json({ error: "Payment order failed" });
+    res.json({ order });
+  } catch (error) {
+    res.status(500).json({ error: "Order creation failed" });
   }
 });
 
-app.post("/api/verify-payment", (req, res) => {
+app.post("/api/verify-payment", async (req, res) => {
   try {
     const {
       razorpay_order_id,
       razorpay_payment_id,
       razorpay_signature,
+      plan,
+      userId
     } = req.body;
 
-    const body = `${razorpay_order_id}|${razorpay_payment_id}`;
+    const sign = razorpay_order_id + "|" + razorpay_payment_id;
 
-    const expectedSignature = crypto
+    const expected = crypto
       .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
-      .update(body)
+      .update(sign)
       .digest("hex");
 
-    if (expectedSignature === razorpay_signature) {
-      return res.json({ success: true });
+    if (expected !== razorpay_signature) {
+      return res.status(400).json({ error: "Invalid payment signature" });
     }
 
-    res.status(400).json({ error: "Invalid signature" });
-  } catch (err) {
-    console.error("Verification error:", err);
-    res.status(500).json({ error: "Verification failed" });
+    // ✅ Payment verified — add credits
+    const creditsToAdd = PLAN_CREDITS[plan];
+
+    if (!creditsToAdd) {
+      return res.status(400).json({ error: "Invalid plan" });
+    }
+
+    await User.updateOne(
+      { _id: userId },
+      { $inc: { credits: creditsToAdd } }
+    );
+
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: "Payment verification failed" });
   }
 });
 

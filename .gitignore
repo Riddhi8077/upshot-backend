@@ -1,2 +1,6 @@
+HEAD
 .env
 node_modules
+dist/
+.vite/
+bf59275 (Updated backend server logic and added gitignore)
